@@ -116,3 +116,26 @@ func TestApplyCodexProviderMapsEnvKeyWithoutKeepingOpenAIAPIKey(t *testing.T) {
 		t.Fatalf("expected old auth field to be removed, got %#v", auth)
 	}
 }
+
+func TestRestoreBackupRejectsInvalidBackupName(t *testing.T) {
+	tmp := t.TempDir()
+	oldHome := homeDir
+	homeDir = tmp
+	t.Cleanup(func() {
+		homeDir = oldHome
+	})
+	t.Chdir(tmp)
+
+	s := NewStore()
+	for _, name := range []string{
+		"../codex_20260427_140814",
+		"codex/20260427_140814",
+		`codex\20260427_140814`,
+		"claude_20260427_140814",
+		"codex_not_a_timestamp",
+	} {
+		if err := s.RestoreBackup("codex", name); err == nil {
+			t.Fatalf("expected invalid backup name %q to be rejected", name)
+		}
+	}
+}

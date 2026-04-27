@@ -855,11 +855,6 @@ func (s *Store) ListBackups(tool string) ([]string, error) {
 }
 
 func (s *Store) RestoreBackup(tool, backupName string) error {
-	backupDir := filepath.Join(ProjectDir(), BackupsDir, backupName)
-	info, err := os.Stat(backupDir)
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("backup not found")
-	}
 	var targets []string
 	if tool == "claude" {
 		targets = []string{
@@ -873,6 +868,15 @@ func (s *Store) RestoreBackup(tool, backupName string) error {
 		}
 	} else {
 		return fmt.Errorf("unknown tool")
+	}
+
+	if !validBackupName(tool, backupName) {
+		return fmt.Errorf("invalid backup name")
+	}
+	backupDir := filepath.Join(ProjectDir(), BackupsDir, backupName)
+	info, err := os.Stat(backupDir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("backup not found")
 	}
 
 	for _, target := range targets {
@@ -890,6 +894,18 @@ func (s *Store) RestoreBackup(tool, backupName string) error {
 		}
 	}
 	return nil
+}
+
+func validBackupName(tool, backupName string) bool {
+	if backupName == "" || filepath.Base(backupName) != backupName || strings.Contains(backupName, `\`) {
+		return false
+	}
+	prefix := tool + "_"
+	if !strings.HasPrefix(backupName, prefix) {
+		return false
+	}
+	_, err := time.Parse("20060102_150405", strings.TrimPrefix(backupName, prefix))
+	return err == nil
 }
 
 // ImportCurrent 导入当前配置为供应商

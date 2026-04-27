@@ -91,14 +91,20 @@ func main() {
 		serveIndex(w)
 	})
 
-	addr := ":18080"
+	addr := "127.0.0.1:18080"
 	if env := os.Getenv("CCSWITCH_ADDR"); env != "" {
 		addr = env
 	}
 
-	fmt.Printf("cc-switch starting on http://0.0.0.0%s/ccswitch/\n", addr)
-	fmt.Println("WARNING: No authentication is enabled. Anyone with network access can read/modify configurations.")
-	fmt.Println("Consider using a reverse proxy with Basic Auth or limiting to localhost.")
+	displayAddr := addr
+	if strings.HasPrefix(addr, ":") {
+		displayAddr = "localhost" + addr
+	}
+	fmt.Printf("cc-switch starting on http://%s/ccswitch/\n", displayAddr)
+	if !strings.HasPrefix(addr, "127.0.0.1:") && !strings.HasPrefix(addr, "localhost:") {
+		fmt.Println("WARNING: No authentication is enabled. Anyone with network access can read/modify configurations.")
+		fmt.Println("Use CCSWITCH_ADDR=127.0.0.1:18080 for local-only access, or protect remote access with a reverse proxy.")
+	}
 	server := &http.Server{
 		Addr:         addr,
 		Handler:      mux,

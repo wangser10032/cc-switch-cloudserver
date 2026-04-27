@@ -22,14 +22,17 @@ stop_existing() {
   if [ -f "$PIDFILE" ]; then
     PID=$(cat "$PIDFILE")
     if kill -0 "$PID" 2>/dev/null; then
-      echo "Stopping existing process $PID ..."
-      kill "$PID" || true
-      sleep 1
+      PROC_CWD=$(readlink "/proc/$PID/cwd" 2>/dev/null || true)
+      if [ "$PROC_CWD" = "$APP_DIR" ]; then
+        echo "Stopping existing process $PID ..."
+        kill "$PID" || true
+        sleep 1
+      else
+        echo "Stale pidfile points to another process $PID; removing pidfile."
+      fi
     fi
     rm -f "$PIDFILE"
   fi
-  # 也查找同名进程
-  pkill -f "cc-switch" 2>/dev/null || true
 }
 
 start_server() {
