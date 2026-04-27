@@ -198,7 +198,7 @@ func (h *Handler) testClaude(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.Marshal(body)
 
-	// 构造 URL：支持 /messages 或 /v1/messages 两种格式
+	// 构造 URL：确保以 /messages 结尾
 	url := strings.TrimSuffix(baseURL, "/")
 	if !strings.Contains(url, "/messages") {
 		url = url + "/messages"
@@ -360,10 +360,22 @@ func (h *Handler) testCodex(w http.ResponseWriter, r *http.Request) {
 	baseURL := req.BaseURL
 	apiKey := req.APIKey
 	model := req.Model
+	authMode := ""
+	accessToken := ""
 
 	if req.ProviderID != "" {
 		p, ok := h.Store.GetCodexProvider(req.ProviderID)
 		if ok {
+			// 检查是否为官方登录模式
+			if v, ok := p.AuthJSON["auth_mode"].(string); ok {
+				authMode = v
+			}
+			if tokens, ok := p.AuthJSON["tokens"].(map[string]any); ok {
+				if v, ok := tokens["access_token"].(string); ok && v != "" {
+					accessToken = v
+				}
+			}
+
 			// 从 config toml 中解析 base_url 和 model
 			var tm map[string]any
 			toml.Unmarshal([]byte(p.ConfigTOML), &tm)
@@ -410,9 +422,26 @@ func (h *Handler) testCodex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 优先使用 access_token（官方登录模式）
+	if accessToken != "" {
+		apiKey = accessToken
+	}
+
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
+
+	// 官方登录模式：如果没有 API Key 但有 auth_mode=chatgpt，提示用户
+	if apiKey == "" && authMode == "chatgpt" {
+		h.respondError(w, http.StatusBadRequest, "官方登录模式：请通过 codex auth 登录获取 token")
+		return
+	}
+
+	// 官方登录模式：如果没有 model，使用默认值
+	if model == "" && accessToken != "" {
+		model = "gpt-4o"
+	}
+
 	var missing []string
 	if apiKey == "" {
 		missing = append(missing, "API Key")
