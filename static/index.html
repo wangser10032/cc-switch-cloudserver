@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cc-switch</title>
+<link rel="stylesheet" href="/ccswitch/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 class="app-title" title="返回供应商列表">cc-switch</h1>
+    <nav>
+      <button class="nav-btn active" data-page="providers">供应商列表</button>
+      <button class="nav-btn" data-page="current">当前配置</button>
+      <button class="nav-btn" data-page="backups">备份恢复</button>
+    </nav>
+  </header>
+  <main id="main"></main>
+</div>
+
+<!-- Modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-content">
+    <span class="close-btn">&times;</span>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script src="/ccswitch/app.js"></script>
+</body>
+</html>

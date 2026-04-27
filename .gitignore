@@ -1,0 +1,35 @@
+# Local runtime data and secrets
+.ccswitch/
+.ccswitch_legacy_*/
+ccswitch_legacy_*/
+.codex
+.env
+*.log
+*.pid
+
+# Build artifacts
+cc-switch
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+coverage.out
+dist/
+build/
+
+# Go workspace/cache artifacts
+vendor/
+go.work
+go.work.sum
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local screenshots and reference captures
+image*.png
