@@ -33,3 +33,7 @@ Thumbs.db
 
 # Local screenshots and reference captures
 image*.png
+
+# md
+cc-switch.md
+cc-switch.original.md
