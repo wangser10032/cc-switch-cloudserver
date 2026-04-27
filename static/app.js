@@ -485,6 +485,12 @@ function renderClaudeEdit() {
   );
   left.appendChild(extraBox);
 
+  // .claude.json editor
+  const claudeJsonTA = el('textarea', { className: 'json-editor', rows: 6 }, fmtJSON(p.claude_json || {}));
+  left.appendChild(el('h4', { className: 'json-section-title' }, '.claude.json'));
+  left.appendChild(el('p', { className: 'editor-hint' }, 'Claude Code 账户设置，如登录态、订阅信息'));
+  left.appendChild(claudeJsonTA);
+
   // Sync form -> JSON
   function syncToJSON() {
     const s = parseJSON(extraSettingsTA.value) || {};
@@ -532,6 +538,9 @@ function renderClaudeEdit() {
     } else {
       delete s.permissions;
     }
+    // sync claude_json from textarea
+    const claudeJson = parseJSON(claudeJsonTA.value);
+    if (claudeJson) p.claude_json = claudeJson;
     const cleaned = cleanClaudeSettings(s);
     settingsTA.value = fmtJSON(cleaned);
     extraSettingsTA.value = fmtJSON(extractClaudeExtraSettings(cleaned));
@@ -572,6 +581,7 @@ function renderClaudeEdit() {
   hooksTA.addEventListener('input', syncToJSON);
   permissionsTA.addEventListener('input', syncToJSON);
   extraSettingsTA.addEventListener('input', syncToJSON);
+  claudeJsonTA.addEventListener('input', syncToJSON);
   settingsTA.addEventListener('input', () => {
     const s = parseJSON(settingsTA.value);
     if (!s) return;
@@ -583,9 +593,11 @@ function renderClaudeEdit() {
     el('button', { className: 'btn primary', onClick: async () => {
       const s = parseJSON(settingsTA.value);
       if (!s) { Toast.error('settings.json JSON 无效'); return; }
+      const cj = parseJSON(claudeJsonTA.value);
+      if (cj === null) { Toast.error('.claude.json JSON 无效'); return; }
       const payload = {
         id: p.id, name: p.name, website: p.website, notes: p.notes,
-        settings: cleanClaudeSettings(s), claude_json: p.claude_json || {}
+        settings: cleanClaudeSettings(s), claude_json: cj || {}
       };
       try {
         if (p.id) await API.put(`/ccswitch/api/claude/providers/${p.id}`, payload);

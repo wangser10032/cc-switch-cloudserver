@@ -211,7 +211,7 @@ func (s *Store) initTemplates() {
 	s.claudeProviders = []models.ClaudeProvider{
 		newClaudeTemplate("volc-ark", "火山方舟", "https://console.volcengine.com/ark", map[string]any{
 			"ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/v3",
-			"ANTHROPIC_MODEL":    "doubao-1-5-pro-32k-250115",
+			"ANTHROPIC_MODEL":    "glm-5.1",
 		}),
 		newClaudeTemplate("zhipu-glm", "GLM / 智谱", "https://open.bigmodel.cn/", map[string]any{
 			"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
@@ -223,7 +223,7 @@ func (s *Store) initTemplates() {
 		}),
 		newClaudeTemplate("xiaomi-mimo", "小米 MiMo", "https://platform.xiaomimimo.com", map[string]any{
 			"ANTHROPIC_BASE_URL": "https://api.xiaomimimo.com/v1",
-			"ANTHROPIC_MODEL":    "mimo-v2-pro",
+			"ANTHROPIC_MODEL":    "mimo-2.5pro",
 		}),
 		newClaudeTemplate("openai-proxy", "OpenAI 代理", "https://platform.openai.com/", map[string]any{
 			"ANTHROPIC_BASE_URL": "http://127.0.0.1:18080/ccswitch/proxy/openai/<供应商ID>",

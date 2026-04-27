@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -188,17 +190,20 @@ func (h *Handler) testClaude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Anthropic Messages 最小连通性测试。
+	// Anthropic Messages API 连通性测试
 	body := map[string]any{
 		"model":      model,
 		"max_tokens": 8,
 		"messages":   []map[string]any{{"role": "user", "content": "hi"}},
 	}
 	b, _ := json.Marshal(body)
-	url := baseURL
+
+	// 构造 URL：支持 /messages 或 /v1/messages 两种格式
+	url := strings.TrimSuffix(baseURL, "/")
 	if !strings.Contains(url, "/messages") {
-		url = strings.TrimSuffix(url, "/") + "/messages"
+		url = url + "/messages"
 	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	testReq, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(b)))
 	if err != nil {
@@ -206,9 +211,9 @@ func (h *Handler) testClaude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	testReq.Header.Set("Content-Type", "application/json")
-	testReq.Header.Set("x-api-key", apiKey)
 	testReq.Header.Set("Authorization", "Bearer "+apiKey)
 	testReq.Header.Set("anthropic-version", "2023-06-01")
+
 	resp, err := client.Do(testReq)
 	if err != nil {
 		h.respondError(w, http.StatusBadGateway, err.Error())
@@ -216,6 +221,7 @@ func (h *Handler) testClaude(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
 		s := string(respBody)
 		s = strings.ReplaceAll(s, apiKey, "***")
@@ -223,12 +229,29 @@ func (h *Handler) testClaude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 解析 Anthropic 响应（支持 text 和 thinking 类型）
 	var m map[string]any
 	json.Unmarshal(respBody, &m)
+
 	var reply string
 	if content, ok := m["content"].([]any); ok && len(content) > 0 {
-		if c, ok := content[0].(map[string]any); ok {
-			reply, _ = c["text"].(string)
+		for _, c := range content {
+			if cm, ok := c.(map[string]any); ok {
+				// 优先取 text 类型
+				if t, ok := cm["type"].(string); ok {
+					if t == "text" {
+						if text, ok := cm["text"].(string); ok {
+							reply = text
+							break
+						}
+					} else if t == "thinking" {
+						// 取 thinking 的 thinking 内容
+						if text, ok := cm["thinking"].(string); ok {
+							reply = "[思考中...] " + text
+						}
+					}
+				}
+			}
 		}
 	}
 	h.respondJSON(w, http.StatusOK, map[string]string{"reply": reply})
@@ -359,7 +382,11 @@ func (h *Handler) testCodex(w http.ResponseWriter, r *http.Request) {
 					if v, ok := provider["base_url"].(string); ok && v != "" {
 						baseURL = v
 					}
+					if v, ok := provider["model"].(string); ok && v != "" && model == "" {
+						model = v
+					}
 				} else {
+					// 尝试从任意 provider 获取 base_url
 					for _, raw := range mp {
 						if provider, ok := raw.(map[string]any); ok {
 							if v, ok := provider["base_url"].(string); ok && v != "" {
@@ -370,6 +397,7 @@ func (h *Handler) testCodex(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			// 从 auth.json 获取 API Key
 			envKey := "OPENAI_API_KEY"
 			if v, ok := p.AuthJSON["env_key"].(string); ok && v != "" {
 				envKey = v
@@ -397,9 +425,12 @@ func (h *Handler) testCodex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := h.Proxy.TestConnection(req.ProviderID, baseURL, apiKey, model)
+	// 使用 OpenAI API 进行测试（优先 Responses API，回退到 Chat Completions）
+	reply, err := testCodexConnection(baseURL, apiKey, model)
 	if err != nil {
-		h.respondError(w, http.StatusBadGateway, err.Error())
+		s := err.Error()
+		s = strings.ReplaceAll(s, apiKey, "***")
+		h.respondError(w, http.StatusBadGateway, s)
 		return
 	}
 	h.respondJSON(w, http.StatusOK, map[string]string{"reply": reply})
@@ -548,4 +579,151 @@ func (h *Handler) restoreBackup(w http.ResponseWriter, r *http.Request) {
 // CLI import handler
 func (h *Handler) HandleCLIImport(tool, name string) error {
 	return h.Store.ImportCurrent(tool, name)
+}
+
+// testCodexConnection 测试 Codex/OpenAI 兼容 API 连接
+// 支持 Responses API (SSE) 和 Chat Completions API
+func testCodexConnection(baseURL, apiKey, model string) (string, error) {
+	// 先尝试 Responses API (sub2api 等代理使用这个)
+	if reply, err := testResponsesAPI(baseURL, apiKey, model); err == nil {
+		return reply, nil
+	}
+	// 回退到 Chat Completions API
+	return testChatCompletion(baseURL, apiKey, model)
+}
+
+// testResponsesAPI 测试 OpenAI Responses API (SSE 流式响应)
+func testResponsesAPI(baseURL, apiKey, model string) (string, error) {
+	body := map[string]any{
+		"model":       model,
+		"input":       []map[string]any{{"role": "user", "content": "hi"}},
+		"instructions": "You are a helpful assistant.",
+	}
+	b, _ := json.Marshal(body)
+
+	url := strings.TrimSuffix(baseURL, "/")
+	if !strings.Contains(url, "/responses") {
+		url = url + "/responses"
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "text/event-stream")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// 解析 SSE 流式响应，提取 response.output_text.done 事件的 text
+	scanner := bufio.NewScanner(resp.Body)
+	const maxScanTokenSize = 1024 * 1024 // 1MB
+	scanner.Buffer(make([]byte, 256), maxScanTokenSize)
+	var fullText strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				break
+			}
+			var event map[string]any
+			if err := json.Unmarshal([]byte(data), &event); err == nil {
+				// 查找 output_text.done 或 output_text.delta
+				if eventType, ok := event["type"].(string); ok {
+					// response.output_text.done 直接包含 text 字段
+					if eventType == "response.output_text.done" {
+						if text, ok := event["text"].(string); ok {
+							return text, nil
+						}
+					}
+					// response.output_item.done 包含完整消息
+					if eventType == "response.output_item.done" {
+						if item, ok := event["item"].(map[string]any); ok {
+							if content, ok := item["content"].([]any); ok {
+								for _, c := range content {
+									if cm, ok := c.(map[string]any); ok {
+										if cm["type"] == "output_text" {
+											if text, ok := cm["text"].(string); ok {
+												return text, nil
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if fullText.Len() > 0 {
+		return fullText.String(), nil
+	}
+	return "", fmt.Errorf("no response content")
+}
+
+// testChatCompletion 使用 OpenAI Chat Completions API 测试连接
+func testChatCompletion(baseURL, apiKey, model string) (string, error) {
+	body := map[string]any{
+		"model":       model,
+		"max_tokens":  8,
+		"messages":    []map[string]any{{"role": "user", "content": "hi"}},
+	}
+	b, _ := json.Marshal(body)
+
+	// 构造 URL：确保以 /chat/completions 结尾
+	url := strings.TrimSuffix(baseURL, "/")
+	if !strings.Contains(url, "/chat/completions") {
+		url = url + "/chat/completions"
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(respBody, &m); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	// 提取 assistant 回复
+	if choices, ok := m["choices"].([]any); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]any); ok {
+			if msg, ok := choice["message"].(map[string]any); ok {
+				if text, ok := msg["content"].(string); ok {
+					return text, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("no response content")
 }
