@@ -37,7 +37,8 @@ const CLI_PATHS = {
 const CLAUDE_MANAGED_ENV_KEYS = [
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
   'ANTHROPIC_REASONING_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL'
+  'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'OPENAI_BASE_URL', 'OPENAI_API_KEY'
 ];
 
 const CLAUDE_MANAGED_TOP_KEYS = [
@@ -480,6 +481,8 @@ function renderClaudeEdit() {
     { label: '官网链接', key: 'website', value: p.website, type: 'text', hint: '可选，点击可跳转', group: 'optional' },
     { label: '备注', key: 'notes', value: p.notes, type: 'text', hint: '可选，显示在卡片上', group: 'optional' },
     { label: '代理 Token', key: 'proxy_token', value: env.ANTHROPIC_AUTH_TOKEN || '', type: 'password', hint: 'OpenAI 代理模式的认证密钥 (与 API Key 相同)', group: 'optional' },
+    { label: 'OpenAI Base URL', key: 'openai_base_url', value: env.OPENAI_BASE_URL || '', type: 'text', hint: 'OpenAI 代理模式上游地址，如 https://api.openai.com/v1', group: 'optional' },
+    { label: 'OpenAI API Key', key: 'openai_api_key', value: env.OPENAI_API_KEY || '', type: 'password', hint: 'OpenAI 代理模式调用上游 Responses API 的密钥', group: 'optional' },
     { label: 'Reasoning Model', key: 'reasoning_model', value: env.ANTHROPIC_REASONING_MODEL || '', type: 'text', hint: '推理模型，可选', group: 'optional' },
     { label: 'Haiku 模型', key: 'haiku', value: env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '', type: 'text', hint: '可选', group: 'optional' },
     { label: 'Sonnet 模型', key: 'sonnet', value: env.ANTHROPIC_DEFAULT_SONNET_MODEL || '', type: 'text', hint: '可选', group: 'optional' },
@@ -575,6 +578,12 @@ function renderClaudeEdit() {
   right.appendChild(el('p', { className: 'editor-hint' }, '与左侧表单实时同步，可直接编辑高级配置'));
   right.appendChild(settingsTA);
 
+  // .claude.json editor
+  const claudeJsonTA = el('textarea', { className: 'json-editor', rows: 8 }, fmtJSON(p.claude_json || {}));
+  right.appendChild(el('h3', {}, `${CLI_PATHS.claudeJSON} 预览`));
+  right.appendChild(el('p', { className: 'editor-hint' }, 'Claude Code 账户设置，如登录态、订阅信息'));
+  right.appendChild(claudeJsonTA);
+
   // Hooks & Permissions JSON editors
   const hooksTA = el('textarea', { className: 'json-editor', rows: 6 }, fmtJSON(p.settings.hooks || {}));
   const permissionsTA = el('textarea', { className: 'json-editor', rows: 6 }, fmtJSON(p.settings.permissions || {}));
@@ -591,12 +600,6 @@ function renderClaudeEdit() {
     extraSettingsTA
   );
   left.appendChild(extraBox);
-
-  // .claude.json editor
-  const claudeJsonTA = el('textarea', { className: 'json-editor', rows: 6 }, fmtJSON(p.claude_json || {}));
-  left.appendChild(el('h4', { className: 'json-section-title' }, '.claude.json'));
-  left.appendChild(el('p', { className: 'editor-hint' }, 'Claude Code 账户设置，如登录态、订阅信息'));
-  left.appendChild(claudeJsonTA);
 
   // Sync form -> JSON
   function syncToJSON() {
@@ -618,6 +621,8 @@ function renderClaudeEdit() {
         if (apiInput && apiInput.value !== v) apiInput.value = v;
       }
       else if (k === 'model') setOrDelete(s.env, 'ANTHROPIC_MODEL', v);
+      else if (k === 'openai_base_url') setOrDelete(s.env, 'OPENAI_BASE_URL', v);
+      else if (k === 'openai_api_key') setOrDelete(s.env, 'OPENAI_API_KEY', v);
       else if (k === 'reasoning_model') setOrDelete(s.env, 'ANTHROPIC_REASONING_MODEL', v);
       else if (k === 'haiku') setOrDelete(s.env, 'ANTHROPIC_DEFAULT_HAIKU_MODEL', v);
       else if (k === 'sonnet') setOrDelete(s.env, 'ANTHROPIC_DEFAULT_SONNET_MODEL', v);
@@ -665,6 +670,8 @@ function renderClaudeEdit() {
       api_key: env2.ANTHROPIC_AUTH_TOKEN,
       proxy_token: env2.ANTHROPIC_AUTH_TOKEN,
       model: env2.ANTHROPIC_MODEL,
+      openai_base_url: env2.OPENAI_BASE_URL,
+      openai_api_key: env2.OPENAI_API_KEY,
       reasoning_model: env2.ANTHROPIC_REASONING_MODEL,
       haiku: env2.ANTHROPIC_DEFAULT_HAIKU_MODEL,
       sonnet: env2.ANTHROPIC_DEFAULT_SONNET_MODEL,
@@ -768,6 +775,49 @@ function renderCodexEdit() {
 
   const headerTitle = p.id ? `编辑 Codex 供应商: ${p.name}` : '新增 Codex 供应商';
 
+  function parseCodexTomlBlocks(toml) {
+    const blocks = [];
+    let current = { header: '', lines: [] };
+    String(toml || '').split('\n').forEach(line => {
+      if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
+        blocks.push(current);
+        current = { header: line.trim(), lines: [] };
+      } else {
+        current.lines.push(line);
+      }
+    });
+    blocks.push(current);
+    return blocks;
+  }
+
+  function tomlKeyOfLine(line) {
+    const m = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=/);
+    return m ? m[1] : '';
+  }
+
+  function tomlValueFromLines(lines, key) {
+    const line = lines.find(l => tomlKeyOfLine(l) === key);
+    if (!line) return '';
+    const raw = line.slice(line.indexOf('=') + 1).trim();
+    const quoted = raw.match(/^"([^"]*)"$/);
+    return quoted ? quoted[1] : raw;
+  }
+
+  function providerSectionHeader(provider) {
+    return `[model_providers.${provider || 'OpenAI'}]`;
+  }
+
+  function codexTopLines(toml) {
+    const block = parseCodexTomlBlocks(toml).find(b => !b.header);
+    return block ? block.lines : [];
+  }
+
+  function codexProviderLines(toml, provider) {
+    const header = providerSectionHeader(provider);
+    const block = parseCodexTomlBlocks(toml).find(b => b.header === header);
+    return block ? block.lines : [];
+  }
+
   // 从现有 toml 提取值
   let tomlModel = '', tomlProvider = '', tomlBaseUrl = '', tomlWire = '';
   let tomlApproval = '', tomlSandbox = '', tomlReasoning = '', tomlPersonality = '';
@@ -775,22 +825,24 @@ function renderCodexEdit() {
   let tomlContextWindow = '', tomlCompactLimit = '';
   let tomlDisableStorage = '', tomlRequiresAuth = '', tomlWslAck = '';
   if (p.config_toml) {
-    const m = p.config_toml.match(/model\s*=\s*"([^"]+)"/); if (m) tomlModel = m[1];
-    const mp = p.config_toml.match(/model_provider\s*=\s*"([^"]+)"/); if (mp) tomlProvider = mp[1];
-    const bu = p.config_toml.match(/base_url\s*=\s*"([^"]+)"/); if (bu) tomlBaseUrl = bu[1];
-    const w = p.config_toml.match(/wire_api\s*=\s*"([^"]+)"/); if (w) tomlWire = w[1];
-    const ap = p.config_toml.match(/approval_policy\s*=\s*"([^"]+)"/); if (ap) tomlApproval = ap[1];
-    const sm = p.config_toml.match(/sandbox_mode\s*=\s*"([^"]+)"/); if (sm) tomlSandbox = sm[1];
-    const re = p.config_toml.match(/model_reasoning_effort\s*=\s*"([^"]+)"/); if (re) tomlReasoning = re[1];
-    const pe = p.config_toml.match(/personality\s*=\s*"([^"]+)"/); if (pe) tomlPersonality = pe[1];
-    const st = p.config_toml.match(/service_tier\s*=\s*"([^"]+)"/); if (st) tomlServiceTier = st[1];
-    const rv = p.config_toml.match(/review_model\s*=\s*"([^"]+)"/); if (rv) tomlReviewModel = rv[1];
-    const na = p.config_toml.match(/network_access\s*=\s*"([^"]+)"/); if (na) tomlNetworkAccess = na[1];
-    const cw = p.config_toml.match(/model_context_window\s*=\s*(\d+)/); if (cw) tomlContextWindow = cw[1];
-    const cl = p.config_toml.match(/model_auto_compact_token_limit\s*=\s*(\d+)/); if (cl) tomlCompactLimit = cl[1];
-    const ds = p.config_toml.match(/disable_response_storage\s*=\s*(true|false)/); if (ds) tomlDisableStorage = ds[1];
-    const ra = p.config_toml.match(/requires_openai_auth\s*=\s*(true|false)/); if (ra) tomlRequiresAuth = ra[1];
-    const wa = p.config_toml.match(/windows_wsl_setup_acknowledged\s*=\s*(true|false)/); if (wa) tomlWslAck = wa[1];
+    const top = codexTopLines(p.config_toml);
+    tomlProvider = tomlValueFromLines(top, 'model_provider');
+    const providerLines = codexProviderLines(p.config_toml, tomlProvider || 'OpenAI');
+    tomlModel = tomlValueFromLines(top, 'model');
+    tomlReviewModel = tomlValueFromLines(top, 'review_model');
+    tomlBaseUrl = tomlValueFromLines(providerLines, 'base_url') || tomlValueFromLines(top, 'base_url');
+    tomlWire = tomlValueFromLines(providerLines, 'wire_api') || tomlValueFromLines(top, 'wire_api');
+    tomlApproval = tomlValueFromLines(top, 'approval_policy');
+    tomlSandbox = tomlValueFromLines(top, 'sandbox_mode');
+    tomlReasoning = tomlValueFromLines(top, 'model_reasoning_effort');
+    tomlPersonality = tomlValueFromLines(top, 'personality');
+    tomlServiceTier = tomlValueFromLines(top, 'service_tier');
+    tomlNetworkAccess = tomlValueFromLines(top, 'network_access');
+    tomlContextWindow = tomlValueFromLines(top, 'model_context_window');
+    tomlCompactLimit = tomlValueFromLines(top, 'model_auto_compact_token_limit');
+    tomlDisableStorage = tomlValueFromLines(top, 'disable_response_storage');
+    tomlRequiresAuth = tomlValueFromLines(providerLines, 'requires_openai_auth');
+    tomlWslAck = tomlValueFromLines(top, 'windows_wsl_setup_acknowledged');
   }
 
   const fieldDefs = [
@@ -846,9 +898,11 @@ function renderCodexEdit() {
     left.appendChild(row);
   });
 
-  const configTA = el('textarea', { className: 'json-editor', rows: 20 }, p.config_toml);
+  const initialExtraConfig = stripManagedCodexToml(p.config_toml || '');
+  const initialConfig = `${buildManagedCodexToml(initialExtraConfig)}\n`;
+  const configTA = el('textarea', { className: 'json-editor', rows: 20 }, initialConfig);
   const authTA = el('textarea', { className: 'json-editor', rows: 10 }, fmtJSON(p.auth_json));
-  const extraConfigTA = el('textarea', { className: 'json-editor', rows: 8 }, stripManagedCodexToml(p.config_toml || ''));
+  const extraConfigTA = el('textarea', { className: 'json-editor', rows: 8 }, initialExtraConfig);
   const extraAuthTA = el('textarea', { className: 'json-editor', rows: 6 }, fmtJSON(extractExtraAuth(p.auth_json, p.auth_json?.env_key || '')));
 
   left.appendChild(el('div', { className: 'config-box extra-box' },
@@ -882,24 +936,12 @@ function renderCodexEdit() {
       'model_context_window', 'model_auto_compact_token_limit'
     ];
     const managedProviderKeys = ['name', 'model', 'base_url', 'wire_api', 'requires_openai_auth'];
-    const blocks = [];
-    let current = { header: '', lines: [] };
-    String(toml || '').split('\n').forEach(line => {
-      if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
-        blocks.push(current);
-        current = { header: line, lines: [] };
-      } else {
-        current.lines.push(line);
-      }
-    });
-    blocks.push(current);
-
-    return blocks.map(block => {
+    return parseCodexTomlBlocks(toml).map(block => {
       const isModelProvider = /^\s*\[model_providers\.[^\]]+\]\s*$/.test(block.header);
       const managedKeys = isModelProvider ? managedProviderKeys : managedTopKeys;
       const lines = block.lines.filter(line => {
-        const m = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=/);
-        return !m || !managedKeys.includes(m[1]);
+        const key = tomlKeyOfLine(line);
+        return !key || !managedKeys.includes(key);
       });
       const hasContent = lines.some(line => line.trim() !== '');
       if (!block.header) return lines.join('\n');
@@ -907,10 +949,29 @@ function renderCodexEdit() {
     }).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  function buildManagedCodexToml() {
+  function splitCodexExtraToml(toml, provider) {
+    const providerHeader = providerSectionHeader(provider);
+    const topLines = [];
+    const providerExtraLines = [];
+    const otherBlocks = [];
+    parseCodexTomlBlocks(stripManagedCodexToml(toml)).forEach(block => {
+      const lines = block.lines.filter(line => line.trim() !== '');
+      if (!block.header) {
+        topLines.push(...lines);
+      } else if (block.header === providerHeader) {
+        providerExtraLines.push(...lines);
+      } else if (lines.length) {
+        otherBlocks.push([block.header, ...lines].join('\n'));
+      }
+    });
+    return { topLines, providerExtraLines, otherBlocks };
+  }
+
+  function buildManagedCodexToml(extraToml = '') {
     const value = key => left.querySelector(`[data-key="${key}"]`)?.value.trim() || '';
     const checked = key => !!left.querySelector(`[data-check="${key}"]`)?.checked;
     const provider = value('model_provider') || 'OpenAI';
+    const extra = splitCodexExtraToml(extraToml, provider);
     const baseURL = value('base_url');
     const wireAPI = value('wire_api') || 'responses';
     const lines = [];
@@ -932,6 +993,7 @@ function renderCodexEdit() {
     if (checked('windows_wsl_setup_acknowledged')) lines.push('windows_wsl_setup_acknowledged = true');
     if (value('model_context_window')) lines.push(`model_context_window = ${value('model_context_window')}`);
     if (value('model_auto_compact_token_limit')) lines.push(`model_auto_compact_token_limit = ${value('model_auto_compact_token_limit')}`);
+    if (extra.topLines.length) lines.push(...extra.topLines);
 
     lines.push('');
     lines.push(`[model_providers.${provider}]`);
@@ -939,6 +1001,8 @@ function renderCodexEdit() {
     if (baseURL) lines.push(`base_url = ${tomlQuote(baseURL)}`);
     if (wireAPI) lines.push(`wire_api = ${tomlQuote(wireAPI)}`);
     if (checked('requires_openai_auth')) lines.push('requires_openai_auth = true');
+    if (extra.providerExtraLines.length) lines.push(...extra.providerExtraLines);
+    if (extra.otherBlocks.length) lines.push('', ...extra.otherBlocks);
 
     return lines.join('\n').trim();
   }
@@ -947,9 +1011,10 @@ function renderCodexEdit() {
     p.name = left.querySelector('[data-key="name"]').value;
     p.website = left.querySelector('[data-key="website"]').value;
     p.notes = left.querySelector('[data-key="notes"]').value;
-    const managed = buildManagedCodexToml();
-    const custom = extraConfigTA.value.trim();
-    configTA.value = custom ? `${managed}\n\n${custom}\n` : `${managed}\n`;
+    const custom = stripManagedCodexToml(extraConfigTA.value).trim();
+    if (extraConfigTA.value.trim() !== custom) extraConfigTA.value = custom;
+    const managed = buildManagedCodexToml(custom);
+    configTA.value = `${managed}\n`;
 
     const apiKey = left.querySelector('[data-key="api_key"]').value;
     const envKey = left.querySelector('[data-key="env_key"]').value;
@@ -969,26 +1034,33 @@ function renderCodexEdit() {
 
   function syncFromTOML() {
     const toml = configTA.value;
+    const top = codexTopLines(toml);
+    const provider = tomlValueFromLines(top, 'model_provider') || 'OpenAI';
+    const providerLines = codexProviderLines(toml, provider);
     const map = {
-      model: /model\s*=\s*"([^"]+)"/, model_provider: /model_provider\s*=\s*"([^"]+)"/,
-      base_url: /base_url\s*=\s*"([^"]+)"/, wire_api: /wire_api\s*=\s*"([^"]+)"/,
-      approval_policy: /approval_policy\s*=\s*"([^"]+)"/, sandbox_mode: /sandbox_mode\s*=\s*"([^"]+)"/,
-      model_reasoning_effort: /model_reasoning_effort\s*=\s*"([^"]+)"/, personality: /personality\s*=\s*"([^"]+)"/,
-      service_tier: /service_tier\s*=\s*"([^"]+)"/
+      model: tomlValueFromLines(top, 'model'),
+      review_model: tomlValueFromLines(top, 'review_model'),
+      model_provider: provider,
+      base_url: tomlValueFromLines(providerLines, 'base_url') || tomlValueFromLines(top, 'base_url'),
+      wire_api: tomlValueFromLines(providerLines, 'wire_api') || tomlValueFromLines(top, 'wire_api'),
+      approval_policy: tomlValueFromLines(top, 'approval_policy'),
+      sandbox_mode: tomlValueFromLines(top, 'sandbox_mode'),
+      model_reasoning_effort: tomlValueFromLines(top, 'model_reasoning_effort'),
+      network_access: tomlValueFromLines(top, 'network_access'),
+      model_context_window: tomlValueFromLines(top, 'model_context_window'),
+      model_auto_compact_token_limit: tomlValueFromLines(top, 'model_auto_compact_token_limit'),
+      personality: tomlValueFromLines(top, 'personality'),
+      service_tier: tomlValueFromLines(top, 'service_tier')
     };
-    for (const [key, re] of Object.entries(map)) {
-      const m = toml.match(re);
+    for (const [key, val] of Object.entries(map)) {
       const inp = left.querySelector(`[data-key="${key}"]`);
-      if (inp && m) inp.value = m[1];
+      if (inp) inp.value = val || '';
     }
     left.querySelectorAll('.field-check').forEach(ch => {
       if (ch.dataset.check === 'requires_openai_auth') {
-        const sectionMatch = toml.match(/\[model_providers\.OpenAI\]([^\[]*)/);
-        const m = sectionMatch ? sectionMatch[1].match(/requires_openai_auth\s*=\s*(true|false)/) : null;
-        ch.checked = m ? m[1] === 'true' : false;
+        ch.checked = tomlValueFromLines(providerLines, 'requires_openai_auth') === 'true';
       } else {
-        const re = new RegExp(`^${ch.dataset.check}\s*=\s*true`, 'm');
-        ch.checked = re.test(toml);
+        ch.checked = tomlValueFromLines(top, ch.dataset.check) === 'true';
       }
     });
     extraConfigTA.value = stripManagedCodexToml(toml);
