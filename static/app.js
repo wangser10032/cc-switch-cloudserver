@@ -305,15 +305,122 @@ async function applyProvider(type, id) {
 }
 
 async function testProvider(type, id) {
+  await runTestWithModal(`/ccswitch/api/${type}/test`, { provider_id: id });
+}
+
+async function runTestWithModal(url, payload) {
+  const streamUrl = url.endsWith('/stream') ? url : `${url}/stream`;
+  const startedAt = Date.now();
+  const pre = el('pre', { className: 'test-output' }, '');
+  const status = el('div', { className: 'test-status' }, '正在连接流式测试接口...');
+  showModal(el('div', {},
+    el('h3', {}, '测试连接'),
+    status,
+    pre
+  ));
+
+  let lastStatus = '正在连接流式测试接口';
+  const timer = setInterval(() => {
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    status.textContent = `${lastStatus} ${elapsed}s`;
+  }, 400);
+
   try {
-    const res = await API.post(`/ccswitch/api/${type}/test`, { provider_id: id });
-    if (res.error) { Toast.error('测试失败: ' + res.error); return; }
-    showModal(el('div', {},
-      el('h3', {}, '测试结果'),
-      el('pre', {}, escapeHtml(res.reply || '(空回复)'))
-    ));
+    const response = await fetch(streamUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(parseHTTPError(text));
+    }
+    if (!response.body) {
+      await runLegacyTestResult(url, payload, pre);
+      lastStatus = '测试通过';
+      clearInterval(timer);
+      status.textContent = `测试通过 ${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+      return;
+    }
+
+    let done = false;
+    await readEventStream(response.body, (event, data) => {
+      if (event === 'status') {
+        lastStatus = data.message || lastStatus;
+      } else if (event === 'delta') {
+        pre.textContent += data.text || '';
+        pre.scrollTop = pre.scrollHeight;
+      } else if (event === 'done') {
+        done = true;
+        lastStatus = '测试通过';
+      } else if (event === 'error') {
+        throw new Error(data.message || '测试失败');
+      }
+    });
+
+    clearInterval(timer);
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    status.textContent = `${done ? '测试通过' : '测试结束'} ${elapsed}s`;
+    if (!pre.textContent) pre.textContent = '(空回复)';
   } catch (err) {
+    clearInterval(timer);
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    status.textContent = `测试失败 ${elapsed}s`;
+    pre.textContent = pre.textContent ? `${pre.textContent}\n\n[错误] ${err.message}` : err.message;
     Toast.error('测试失败: ' + err.message);
+  }
+}
+
+async function runLegacyTestResult(url, payload, pre) {
+  const res = await API.post(url, payload);
+  if (res.error) throw new Error(res.error);
+  pre.textContent = res.reply || '(空回复)';
+}
+
+async function readEventStream(body, onEvent) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.search(/\r?\n\r?\n/)) >= 0) {
+      const block = buffer.slice(0, idx);
+      const matched = buffer.slice(idx).match(/^\r?\n\r?\n/)[0];
+      buffer = buffer.slice(idx + matched.length);
+      handleSSEBlock(block, onEvent);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) handleSSEBlock(buffer, onEvent);
+}
+
+function handleSSEBlock(block, onEvent) {
+  let event = 'message';
+  const dataLines = [];
+  block.split(/\r?\n/).forEach(line => {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  });
+  if (!dataLines.length) return;
+  let data;
+  try {
+    data = JSON.parse(dataLines.join('\n'));
+  } catch {
+    data = { text: dataLines.join('\n') };
+  }
+  onEvent(event, data);
+}
+
+function parseHTTPError(text) {
+  try {
+    const obj = JSON.parse(text);
+    return obj.error || text;
+  } catch {
+    return text || '请求失败';
   }
 }
 
@@ -616,13 +723,7 @@ function renderClaudeEdit() {
       const apiKey = (s.env && s.env.ANTHROPIC_AUTH_TOKEN) || '';
       const model = (s.env && s.env.ANTHROPIC_MODEL) || '';
       const payload = p.id ? { provider_id: p.id } : { base_url: baseURL, api_key: apiKey, model };
-      try {
-        const res = await API.post('/ccswitch/api/claude/test', payload);
-        if (res.error) Toast.error('测试失败: ' + res.error);
-        else showModal(el('div', {}, el('h3', {}, '测试结果'), el('pre', {}, escapeHtml(res.reply))));
-      } catch (err) {
-        Toast.error('测试失败: ' + err.message);
-      }
+      await runTestWithModal('/ccswitch/api/claude/test', payload);
     }}, '测试连接')
   );
 
@@ -934,13 +1035,7 @@ function renderCodexEdit() {
       const envKey = auth.env_key || 'OPENAI_API_KEY';
       const apiKey = auth[envKey] || auth.OPENAI_API_KEY || '';
       const payload = p.id ? { provider_id: p.id } : { base_url: '', api_key: apiKey, model: '' };
-      try {
-        const res = await API.post('/ccswitch/api/codex/test', payload);
-        if (res.error) Toast.error('测试失败: ' + res.error);
-        else showModal(el('div', {}, el('h3', {}, '测试结果'), el('pre', {}, escapeHtml(res.reply))));
-      } catch (err) {
-        Toast.error('测试失败: ' + err.message);
-      }
+      await runTestWithModal('/ccswitch/api/codex/test', payload);
     }}, '测试连接')
   );
 
@@ -1014,13 +1109,7 @@ async function renderCurrent() {
       const baseURL = (s.env && s.env.ANTHROPIC_BASE_URL) || '';
       const apiKey = (s.env && s.env.ANTHROPIC_AUTH_TOKEN) || '';
       const model = (s.env && s.env.ANTHROPIC_MODEL) || '';
-      try {
-        const res = await API.post('/ccswitch/api/claude/test', { base_url: baseURL, api_key: apiKey, model });
-        if (res.error) Toast.error('测试失败: ' + res.error);
-        else showModal(el('div', {}, el('h3', {}, '测试结果'), el('pre', {}, escapeHtml(res.reply))));
-      } catch (err) {
-        Toast.error('测试失败: ' + err.message);
-      }
+      await runTestWithModal('/ccswitch/api/claude/test', { base_url: baseURL, api_key: apiKey, model });
     }}, '测试当前配置'),
     el('button', { className: 'btn danger', onClick: async () => {
       if (!confirm('确定将当前 Claude 配置写入 ~/.claude/settings.json 并备份原配置？')) return;
@@ -1089,13 +1178,7 @@ async function renderCurrent() {
       const sectionMatch = toml.match(new RegExp(`\\[model_providers\\.${providerName}\\]([^\\[]*)`)) || toml.match(/\[model_providers\.[^\]]+\]([^\[]*)/);
       const mp = sectionMatch ? sectionMatch[1].match(/base_url\s*=\s*"([^"]+)"/) : null;
       if (mp) baseUrl = mp[1];
-      try {
-        const res = await API.post('/ccswitch/api/codex/test', { base_url: baseUrl, api_key: apiKey, model });
-        if (res.error) Toast.error('测试失败: ' + res.error);
-        else showModal(el('div', {}, el('h3', {}, '测试结果'), el('pre', {}, escapeHtml(res.reply))));
-      } catch (err) {
-        Toast.error('测试失败: ' + err.message);
-      }
+      await runTestWithModal('/ccswitch/api/codex/test', { base_url: baseUrl, api_key: apiKey, model });
     }}, '测试当前配置'),
     el('button', { className: 'btn danger', onClick: async () => {
       if (!confirm('确定将当前 Codex 配置写入 ~/.codex/ 并备份原配置？')) return;

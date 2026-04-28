@@ -421,7 +421,8 @@ func (s *Store) ApplyClaudeProvider(id string) error {
 		_ = json.Unmarshal(b, &existingSettings)
 	}
 
-	// 只覆盖核心 env 字段和 model 字段，保留其他
+	// Claude Code 供应商切换时，env 必须以供应商配置为准整块替换。
+	// 否则上一个供应商的模型、token 或 Base URL 字段会残留到新供应商。
 	providerEnv := map[string]any{}
 	if p.Settings["env"] != nil {
 		if e, ok := p.Settings["env"].(map[string]any); ok {
@@ -429,32 +430,21 @@ func (s *Store) ApplyClaudeProvider(id string) error {
 		}
 	}
 
-	existingEnv := map[string]any{}
-	if existingSettings["env"] != nil {
-		if e, ok := existingSettings["env"].(map[string]any); ok {
-			existingEnv = e
+	newEnv := map[string]any{}
+	for k, v := range providerEnv {
+		if v == nil {
+			continue
 		}
-	}
-
-	// 切换认证方式时，先清理旧的 ANTHROPIC_AUTH_TOKEN
-	delete(existingEnv, "ANTHROPIC_AUTH_TOKEN")
-
-	// 核心字段列表：provider 中存在的字段覆盖，空字符串则删除
-	coreEnvKeys := []string{
-		"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
-		"ANTHROPIC_REASONING_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-		"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
-	}
-	for _, k := range coreEnvKeys {
-		if v, ok := providerEnv[k]; ok {
-			if vs, sok := v.(string); sok && vs == "" {
-				delete(existingEnv, k)
-			} else {
-				existingEnv[k] = v
-			}
+		if vs, ok := v.(string); ok && vs == "" {
+			continue
 		}
+		newEnv[k] = v
 	}
-	existingSettings["env"] = existingEnv
+	if len(newEnv) == 0 {
+		delete(existingSettings, "env")
+	} else {
+		existingSettings["env"] = newEnv
+	}
 
 	if v, ok := p.Settings["model"]; ok {
 		if vs, sok := v.(string); sok && vs == "" {

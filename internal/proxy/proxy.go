@@ -22,6 +22,9 @@ func New(s *config.Store) *Proxy {
 
 func (p *Proxy) Handler(w http.ResponseWriter, r *http.Request) {
 	providerID := strings.TrimPrefix(r.URL.Path, "/ccswitch/proxy/openai/")
+	if idx := strings.Index(providerID, "/"); idx >= 0 {
+		providerID = providerID[:idx]
+	}
 	if providerID == "" {
 		http.Error(w, "missing provider id", http.StatusBadRequest)
 		return

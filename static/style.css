@@ -140,6 +140,8 @@ main.loading { opacity: 0.6; pointer-events: none; }
 }
 .close-btn { position: absolute; top: 10px; right: 14px; font-size: 24px; cursor: pointer; }
 pre { background: #f6f8fa; padding: 12px; border-radius: 8px; overflow: auto; font-size: 13px; }
+.test-status { color: #57606a; font-size: 13px; margin: 4px 0 10px; }
+.test-output { min-height: 92px; white-space: pre-wrap; }
 .empty { color: #888; }
 
 /* Toast notifications */

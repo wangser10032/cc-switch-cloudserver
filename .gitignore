@@ -32,9 +32,11 @@ Thumbs.db
 *.swo
 
 # Local screenshots and reference captures
-image*.png
+*.png
 
 # md
 cc-switch.md
 cc-switch.original.md
 CLAUDE.md
+.gitignore
+AGENTS.md

@@ -10,6 +10,92 @@ import (
 	"cc-switch/internal/models"
 )
 
+func TestApplyClaudeProviderReplacesEnv(t *testing.T) {
+	tmp := t.TempDir()
+	oldHome := homeDir
+	homeDir = tmp
+	t.Cleanup(func() {
+		homeDir = oldHome
+	})
+	t.Chdir(tmp)
+
+	claudeDir := filepath.Join(tmp, ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldSettings := []byte(`{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "old-token",
+    "ANTHROPIC_BASE_URL": "https://old.example.com",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "old-haiku",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "old-opus",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "old-sonnet",
+    "ANTHROPIC_MODEL": "old-model",
+    "ANTHROPIC_REASONING_MODEL": "old-reasoning"
+  },
+  "permissions": {
+    "allow": ["Bash(date)"]
+  },
+  "language": "zh-CN"
+}`)
+	if err := os.WriteFile(filepath.Join(claudeDir, ClaudeSettingsFile), oldSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore()
+	s.claudeProviders = []models.ClaudeProvider{
+		{
+			ID:   "minimax",
+			Name: "MiniMax",
+			Settings: map[string]any{
+				"env": map[string]any{
+					"ANTHROPIC_AUTH_TOKEN": "new-token",
+					"ANTHROPIC_BASE_URL":   "https://new.example.com",
+					"ANTHROPIC_MODEL":      "new-model",
+				},
+			},
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+
+	if err := s.ApplyClaudeProvider("minimax"); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(claudeDir, ClaudeSettingsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(b, &settings); err != nil {
+		t.Fatal(err)
+	}
+	env, ok := settings["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected env to exist, got %#v", settings["env"])
+	}
+	want := map[string]any{
+		"ANTHROPIC_AUTH_TOKEN": "new-token",
+		"ANTHROPIC_BASE_URL":   "https://new.example.com",
+		"ANTHROPIC_MODEL":      "new-model",
+	}
+	if len(env) != len(want) {
+		t.Fatalf("expected env to be replaced with %#v, got %#v", want, env)
+	}
+	for k, v := range want {
+		if env[k] != v {
+			t.Fatalf("expected env[%s] = %q, got %#v", k, v, env[k])
+		}
+	}
+	if _, ok := env["ANTHROPIC_REASONING_MODEL"]; ok {
+		t.Fatalf("expected old reasoning model to be removed, got %#v", env)
+	}
+	if _, ok := settings["permissions"]; !ok {
+		t.Fatalf("expected non-env settings to be preserved, got %#v", settings)
+	}
+}
+
 func TestApplyCodexProviderOverwritesAuthJSON(t *testing.T) {
 	tmp := t.TempDir()
 	oldHome := homeDir
